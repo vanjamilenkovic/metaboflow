@@ -1,0 +1,135 @@
+---
+title: "Bubble Plot — Pairwise PERMANOVA Results"
+output: html_document
+date: "2025-04-24"
+author: "Vanja Milenkovic"
+---
+
+> **Prerequisite:** Run `03.permanova.Rmd` first to generate the pairwise
+> PERMANOVA results. This script reads a pre-formatted summary CSV and
+> visualises the results as a bubble plot.
+
+Bubble plots show R² (bubble size) and p-value (bubble colour) for each
+pairwise group comparison, split by experimental factor category.
+
+**Required input file:** `permanova_final_bubble_data.csv`
+
+This CSV must contain the following columns:
+
+| Column | Description |
+|--------|-------------|
+| `group1` | First group in the pairwise comparison |
+| `group2` | Second group in the pairwise comparison |
+| `R2` | Effect size (R²) from pairwise PERMANOVA |
+| `p_value` | p-value from pairwise PERMANOVA |
+| `significance` | Significance label (e.g. `*`, `**`, or empty string) |
+| `category` | Factor category label (e.g. `"Timepoint"`, `"Treatment"`, `"Interaction"`) |
+
+The `category` values drive the panel split — edit `bubble_categories` below
+to match the categories in your CSV.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## ── USER CONFIGURATION ───────────────────────────────────────────────────────
+
+```{r bubble-config}
+# Path to the pre-formatted pairwise PERMANOVA results CSV
+file_bubble <- here::here("permanova_final_bubble_data.csv")
+
+# Category names to display as separate panels (must match values in the
+# `category` column of file_bubble). Order controls the panel order.
+bubble_categories <- c("Timepoint", "Treatment", "Interaction")
+```
+
+---
+
+## Load packages
+
+```{r load-packages}
+library(ggplot2)
+library(dplyr)
+library(patchwork)
+library(here)
+```
+
+## Load and prepare data
+
+```{r load-data}
+df <- read.csv(file_bubble)
+
+df$category <- factor(df$category, levels = bubble_categories)
+```
+
+## Build bubble plots
+
+```{r bubble-helper}
+make_bubble <- function(data) {
+  ggplot(data, aes(x = group1, y = group2, size = R2, fill = p_value)) +
+    geom_point(shape = 21, color = "black", alpha = 0.7) +
+    geom_text(
+      data = subset(data, significance != ""),
+      aes(label = significance),
+      color = "white", size = 4, fontface = "bold"
+    ) +
+    scale_size_continuous(
+      limits = c(0.02, 0.4), range = c(3, 15), name = "R²"
+    ) +
+    scale_fill_viridis_c(
+      name      = "p-value",
+      option    = "magma",
+      direction = -1,         # darker = smaller p-value
+      limits    = c(0, 0.06),
+      oob       = scales::squish
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+      axis.text.x  = element_text(angle = 45, hjust = 1),
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank()
+    )
+}
+```
+
+```{r build-panels}
+panel_list <- lapply(seq_along(bubble_categories), function(i) {
+  cat_label <- bubble_categories[i]
+  make_bubble(filter(df, category == cat_label)) +
+    ggtitle(paste0(LETTERS[i], ". ", cat_label))
+})
+```
+
+## Combined figure
+
+```{r combined-figure, fig.width=12, fig.height=10}
+# Layout: first two panels side by side, remaining panels below
+n <- length(panel_list)
+if (n >= 2) {
+  top_row   <- Reduce(`+`, panel_list[1:2])
+  if (n > 2) {
+    bottom_row <- Reduce(`+`, panel_list[3:n])
+    combined   <- top_row / bottom_row +
+      plot_layout(guides = "collect", heights = c(1, n - 2)) &
+      theme(plot.title = element_text(size = 16, face = "bold"),
+            legend.position = "right")
+  } else {
+    combined <- top_row +
+      plot_layout(guides = "collect") &
+      theme(plot.title = element_text(size = 16, face = "bold"),
+            legend.position = "right")
+  }
+} else {
+  combined <- panel_list[[1]]
+}
+
+print(combined)
+```
+
+## Save figure
+
+```{r save-figure}
+dir.create("plots", showWarnings = FALSE)
+ggsave("plots/permanova_bubble_plot.png", combined,
+       width = 12, height = 10, dpi = 600)
+```

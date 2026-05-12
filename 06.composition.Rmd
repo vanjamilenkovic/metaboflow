@@ -1,0 +1,157 @@
+---
+title: "Metabolite Class Composition Bar Plots"
+output: html_document
+date: "2025-04-09"
+author: "Vanja Milenkovic"
+---
+
+> **Prerequisite:** Run `00.phyloseq_object.Rmd` first. That script creates
+> the `pseq` and `pseqs` objects and the configuration variables used here
+> (`col_color`, `col_shape`, `col_tax_level`).
+
+Stacked bar plots show the relative abundance of metabolite compound classes
+across samples. The compound class column is defined by `col_tax_level` in
+script 00 (default: `ClassyFire.class`). Rare classes below the detection and
+prevalence thresholds are merged into an "Other" category.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## ── USER CONFIGURATION ───────────────────────────────────────────────────────
+
+```{r composition-config}
+# Minimum relative abundance to retain a class (default: 1%)
+detection_threshold <- 1/100
+
+# Minimum prevalence (fraction of samples) to retain a class (default: 10%)
+prevalence_threshold <- 10/100
+
+# Maximum number of classes to show with individual colours (rest = "Other")
+n_taxa_plot <- 15
+```
+
+---
+
+## Load packages
+
+```{r load-packages}
+library(microbiome)
+library(dplyr)
+library(phyloseq)
+library(RColorBrewer)
+library(tidyverse)
+library(microViz)
+```
+
+## Prepare data
+
+```{r prepare-data}
+ps <- transform(pseq, "compositional")
+ps <- aggregate_rare(ps,
+                     level      = col_tax_level,
+                     detection  = detection_threshold,
+                     prevalence = prevalence_threshold)
+```
+
+## Composition bar plot — phyloseq default
+
+```{r barplot-phyloseq, fig.width=8, fig.height=5}
+n_classes  <- length(unique(tax_table(ps)[, col_tax_level]))
+getPalette <- colorRampPalette(brewer.pal(11, "Paired"))
+
+p <- plot_bar(ps, x = col_color, fill = col_tax_level) +
+  geom_bar(aes(fill = .data[[col_tax_level]]),
+           stat = "identity", position = "stack") +
+  scale_fill_manual(values = getPalette(n_classes)) +
+  facet_wrap(reformulate(col_shape), scales = "free_x") +
+  theme_classic() +
+  labs(fill = "Compound class",
+       x    = col_color) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0))
+
+p
+```
+
+## Composition bar plot — microViz
+
+```{r barplot-microviz-simple, fig.width=8, fig.height=4}
+ps %>%
+  comp_barplot(tax_level = col_tax_level) +
+  coord_flip()
+```
+
+```{r barplot-microviz-custom, fig.width=10, fig.height=5}
+ps %>%
+  comp_barplot(
+    tax_level           = col_tax_level,
+    facet_by            = col_shape,
+    label               = NULL,
+    n_taxa              = n_taxa_plot,
+    other_name          = "Other compounds",
+    order_with_all_taxa = TRUE,
+    tax_order           = prev,
+    merge_other         = FALSE,
+    bar_width           = 0.7,
+    bar_outline_colour  = "grey5"
+  ) +
+  coord_flip()
+```
+
+## Merge and compare two datasets
+
+Merge two phyloseq objects (e.g. two tissues or experiments) for direct
+visual comparison. Replace `dataset1` and `dataset2` with your own objects
+and update the `dataset` labels below.
+
+```{r merge-datasets}
+# Replace pseq / pseqs with your two datasets as needed
+dataset1 <- pseq  %>% ps_mutate(dataset = "Dataset 1")
+dataset2 <- pseqs %>% ps_mutate(dataset = "Dataset 2")
+
+dataset1 <- dataset1 %>%
+  tax_fix(unknowns = c("", " ", "unknown")) %>%
+  transform("compositional") %>%
+  aggregate_rare(level      = col_tax_level,
+                 detection  = detection_threshold,
+                 prevalence = prevalence_threshold)
+
+dataset2 <- dataset2 %>%
+  tax_fix(unknowns = c("", " ", "unknown")) %>%
+  transform("compositional") %>%
+  aggregate_rare(level      = col_tax_level,
+                 detection  = detection_threshold,
+                 prevalence = prevalence_threshold)
+
+combined <- phyloseq::merge_phyloseq(
+  dataset1 %>% tax_agg(col_tax_level) %>% ps_get(),
+  dataset2 %>% tax_agg(col_tax_level) %>% ps_get()
+)
+
+combined
+```
+
+```{r merged-barplot-facet, fig.width=8, fig.height=5}
+combined %>%
+  comp_barplot(col_tax_level, facet_by = "dataset", n_taxa = n_taxa_plot) +
+  coord_flip()
+```
+
+```{r merged-barplot-grouped, fig.width=8, fig.height=6}
+plots <- combined %>%
+  comp_barplot(col_tax_level, n_taxa = n_taxa_plot,
+               group_by = "dataset", bar_outline_colour = NA)
+
+patchwork::wrap_plots(plots, nrow = 2, guides = "collect") &
+  theme(axis.ticks.x = element_blank(), axis.text.x = element_blank())
+```
+
+```{r merged-barplot-treatment, fig.width=10, fig.height=6}
+plots <- combined %>%
+  comp_barplot(col_tax_level, n_taxa = n_taxa_plot,
+               facet_by = col_shape, group_by = "dataset",
+               bar_outline_colour = NA)
+
+patchwork::wrap_plots(plots, nrow = 2, guides = "collect") &
+  theme(axis.ticks.x = element_blank(), axis.text.x = element_blank())
+```

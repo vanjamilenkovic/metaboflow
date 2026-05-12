@@ -1,0 +1,133 @@
+---
+title: "Plot Selected Features"
+output: html_document
+date: "2025-03-18"
+author: "Vanja Milenkovic"
+---
+
+> **Prerequisite:** Run `00.phyloseq_object.Rmd` first. That script creates
+> the `pseq` object and configuration variables used here (`col_color`,
+> `col_shape`, `col_chem_name`, `col_tax_fallback`).
+
+This script visualises the abundance of a user-defined feature subset.
+Features are identified by their row IDs from the abundance table (e.g. VIP
+features from OPLS-DA models in SIMCA). Feature IDs are replaced with
+chemical names from the taxonomy table where available.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## ── USER CONFIGURATION ───────────────────────────────────────────────────────
+
+```{r feature-config}
+# Row IDs of the features you want to plot. Replace with your own feature IDs.
+# These are the top 12 VIP features shared between two OPLS-DA models.
+features_of_interest <- c("382",  "366",  "746",  "391",  "400",  "339",
+                           "1556", "405",  "1557", "3235", "401",  "445")
+
+# Optional plot title
+plot_title <- "Abundance of selected VIP features"
+```
+
+---
+
+## Load packages
+
+```{r load-packages}
+library(phyloseq)
+library(microbiome)
+library(microbiomeutilities)
+library(ggplot2)
+library(ggpubr)
+library(tidyr)
+library(dplyr)
+library(scales)
+```
+
+## Subset phyloseq to selected features
+
+```{r subset-features}
+ps_sub <- prune_taxa(taxa_names(pseq) %in% features_of_interest, pseq)
+
+cat(ntaxa(ps_sub), "of", length(features_of_interest),
+    "requested features found in the phyloseq object.\n")
+```
+
+## Rename features using chemical classification
+
+Replace numeric row IDs with chemical names from the taxonomy table.
+Falls back to `col_tax_fallback` (defined in script 00) when the primary
+name column (`col_chem_name`) is empty, and to "Unknown" if both are missing.
+
+```{r rename-features}
+tax_table(ps_sub) <- as.matrix(tax_table(ps_sub))
+
+# Primary name
+feature_names <- as.character(tax_table(ps_sub)[, col_chem_name])
+
+# Fallback name
+missing <- is.na(feature_names) | feature_names == ""
+feature_names[missing] <- as.character(
+  tax_table(ps_sub)[missing, col_tax_fallback]
+)
+
+# Final fallback
+feature_names[is.na(feature_names) | feature_names == ""] <- "Unknown"
+
+# Append row ID to guarantee unique names
+taxa_names(ps_sub) <- paste0(feature_names, "_", taxa_names(ps_sub))
+```
+
+## Melt to long format
+
+```{r melt-data}
+df_sub <- psmelt(ps_sub)
+```
+
+## Bar plot — abundance of selected features
+
+```{r feature-barplot, fig.width=8, fig.height=6}
+# Order features by total abundance (most abundant first)
+otu_order <- df_sub %>%
+  group_by(OTU) %>%
+  summarise(total_abundance = sum(Abundance), .groups = "drop") %>%
+  arrange(desc(total_abundance)) %>%
+  pull(OTU)
+
+df_sub <- df_sub %>%
+  mutate(OTU = factor(OTU, levels = otu_order))
+
+p_features <- ggplot(df_sub,
+                     aes(x    = .data[[col_color]],
+                         y    = Abundance,
+                         fill = .data[[col_shape]])) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  scale_fill_brewer(palette = "Set2") +
+  facet_wrap(reformulate("OTU")) +
+  theme_bw() +
+  labs(
+    title = plot_title,
+    x     = col_color,
+    y     = "Abundance",
+    fill  = col_shape
+  ) +
+  scale_y_continuous(labels = label_log()) +
+  theme(
+    axis.text.x     = element_text(size = 6, angle = 45, hjust = 1),
+    axis.text.y     = element_text(size = 6),
+    axis.title.x    = element_text(size = 8),
+    axis.title.y    = element_text(size = 8),
+    plot.title      = element_text(size = 10),
+    strip.text      = element_text(size = 5),
+    legend.text     = element_text(size = 5),
+    legend.title    = element_text(size = 7),
+    legend.key.size = unit(0.3, "cm")
+  )
+
+print(p_features)
+
+dir.create("plots", showWarnings = FALSE)
+ggsave("plots/selected_features.png", p_features,
+       width = 6.3, height = 5, units = "in", dpi = 600, bg = "white")
+```

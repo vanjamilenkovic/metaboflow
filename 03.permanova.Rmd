@@ -1,0 +1,213 @@
+---
+title: "PERMANOVA — Metabolome Composition Statistics"
+output: html_document
+date: "2025-03-19"
+author: "Vanja Milenkovic"
+---
+
+> **Prerequisite:** Run `00.phyloseq_object.Rmd` first. That script creates
+> the `pseq` object and the configuration variables used here:
+> `col_stat_vars`, `formula_full`, `formula_best`,
+> `col_exclude_var`, `col_exclude_val`.
+
+PERMANOVA (Permutational Multivariate Analysis of Variance) tests whether
+defined grouping variables significantly explain variation in overall metabolome
+composition, using Bray-Curtis dissimilarities on compositionally transformed
+data.
+
+Statistical tests are run twice: on the full dataset and on the dataset with
+the reference group excluded (controlled by `col_exclude_var`/`col_exclude_val`
+in script 00).
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load packages
+
+```{r load-packages}
+library(phyloseq)
+library(ggplot2)
+library(vegan)
+library(microbiome)
+library(RColorBrewer)
+library(dplyr)
+library(pairwiseAdonis)
+```
+
+## Prepare datasets
+
+```{r prepare-data}
+ps0  <- microbiome::transform(pseq, "compositional")
+meta <- meta(ps0)
+dist_mat <- distance(ps0, method = "bray")
+
+if (!is.null(col_exclude_val)) {
+  ps.t     <- ps_filter(pseq, .data[[col_exclude_var]] != col_exclude_val)
+  ps.t     <- microbiome::transform(ps.t, "compositional")
+  meta.t   <- meta(ps.t)
+  dist_mat.t <- distance(ps.t, method = "bray")
+} else {
+  ps.t     <- ps0
+  meta.t   <- meta
+  dist_mat.t <- dist_mat
+}
+```
+
+## Single-factor PERMANOVA — full dataset
+
+Each variable in `col_stat_vars` is tested independently.
+
+```{r permanova-single-full}
+for (v in col_stat_vars) {
+  cat("\n──", v, "──\n")
+  f <- as.formula(paste("dist_mat ~", v))
+  print(adonis2(f, data = meta, permutations = 9999))
+}
+```
+
+## Single-factor PERMANOVA — reference group excluded
+
+```{r permanova-single-no-ref}
+if (!is.null(col_exclude_val)) {
+  for (v in col_stat_vars) {
+    cat("\n──", v, "(", col_exclude_val, "excluded) ──\n")
+    f <- as.formula(paste("dist_mat.t ~", v))
+    print(adonis2(f, data = meta.t, permutations = 9999))
+  }
+}
+```
+
+## Model selection — full dataset
+
+Start with the saturated model including all main effects and interactions
+(`formula_full`, defined in script 00). Then remove non-significant terms
+to arrive at the best-fit model (`formula_best`).
+
+**After running `full_model`, update `formula_best` in script 00 to keep
+only the significant terms, then re-run this script.**
+
+```{r full-model}
+full_model <- adonis2(
+  as.formula(paste("dist_mat", formula_full)),
+  data = meta, permutations = 9999, by = "term"
+)
+full_model
+```
+
+```{r best-model}
+best_model <- adonis2(
+  as.formula(paste("dist_mat", formula_best)),
+  data = meta, permutations = 9999, by = "term"
+)
+best_model
+```
+
+## Model selection — reference group excluded
+
+```{r full-model-no-ref}
+if (!is.null(col_exclude_val)) {
+  full_model_t <- adonis2(
+    as.formula(paste("dist_mat.t", formula_full)),
+    data = meta.t, permutations = 9999, by = "term"
+  )
+  full_model_t
+}
+```
+
+```{r best-model-no-ref}
+if (!is.null(col_exclude_val)) {
+  best_model_t <- adonis2(
+    as.formula(paste("dist_mat.t", formula_best)),
+    data = meta.t, permutations = 9999, by = "term"
+  )
+  best_model_t
+}
+```
+
+## Compare models — R² and adjusted R²
+
+```{r compare-models}
+if (!is.null(col_exclude_val)) {
+  r2_values <- data.frame(
+    Model = c("best_model (reference excluded)", "best_model (full dataset)"),
+    R2    = c(best_model_t$R2[1], best_model$R2[1])
+  )
+  print(r2_values)
+
+  n_t <- nrow(meta.t);  n <- nrow(meta)
+  p_t <- length(best_model_t$R2) - 1
+  p   <- length(best_model$R2)   - 1
+  r2_t <- best_model_t$R2[1];  r2 <- best_model$R2[1]
+
+  adj_r2_values <- data.frame(
+    Model       = c("best_model (reference excluded)", "best_model (full dataset)"),
+    Adjusted_R2 = c(1 - ((1 - r2_t) / (1 - p_t / n_t)),
+                    1 - ((1 - r2)   / (1 - p   / n)))
+  )
+  print(adj_r2_values)
+}
+```
+
+## Variance partitioning
+
+How much variation does each predictor in `col_stat_vars` explain?
+
+```{r variance-partitioning}
+n_terms <- length(col_stat_vars)
+
+if (!is.null(col_exclude_val)) {
+  var_comparison <- data.frame(
+    Term                  = col_stat_vars,
+    R2_reference_excluded = best_model_t$R2[seq_len(n_terms)],
+    R2_full_dataset       = best_model$R2[seq_len(n_terms)]
+  )
+} else {
+  var_comparison <- data.frame(
+    Term            = col_stat_vars,
+    R2_full_dataset = best_model$R2[seq_len(n_terms)]
+  )
+}
+print(var_comparison)
+```
+
+## Export PERMANOVA results
+
+```{r export-results}
+dir.create("stats", showWarnings = FALSE)
+write.csv(best_model, "stats/permanova_best.csv", row.names = TRUE)
+if (!is.null(col_exclude_val)) {
+  write.csv(best_model_t,
+            paste0("stats/permanova_best_no_", col_exclude_val, ".csv"),
+            row.names = TRUE)
+}
+```
+
+## Post-hoc pairwise PERMANOVA
+
+Identify which specific group pairs drive the significant effects above.
+All variables in `col_stat_vars` are tested.
+
+```{r pairwise-permanova}
+for (v in col_stat_vars) {
+  cat("\n── Pairwise PERMANOVA:", v, "──\n")
+  print(pairwise.adonis(dist_mat, factors = meta[[v]]))
+}
+```
+
+```{r pairwise-interactions}
+# All pairwise combinations of stat variables are tested as interaction factors
+if (length(col_stat_vars) >= 2) {
+  pairs <- combn(col_stat_vars, 2, simplify = FALSE)
+  for (pair in pairs) {
+    int_col <- paste0(pair[1], "_x_", pair[2])
+    meta[[int_col]] <- interaction(meta[[pair[1]]], meta[[pair[2]]])
+    cat("\n── Pairwise PERMANOVA: interaction", pair[1], "×", pair[2], "──\n")
+    res_int <- pairwise.adonis(dist_mat, factors = meta[[int_col]])
+    print(res_int)
+    write.csv(res_int,
+              paste0("stats/pairwise_", int_col, ".csv"),
+              row.names = TRUE)
+  }
+}
+```

@@ -1,0 +1,141 @@
+---
+title: "Metabolomics — Build Phyloseq Object"
+output: html_document
+date: "2025-03-14"
+author: "Vanja Milenkovic"
+---
+
+> **Run this script first.** All downstream scripts (01–07) depend on the
+> objects and configuration variables created here. Open this file in RStudio
+> and knit/source it before running any other script in the pipeline.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Required packages
+
+```{r load-packages}
+library(phyloseq)
+library(tibble)
+library(dplyr)
+library(here)   # portable paths — install with: install.packages("here")
+```
+
+---
+
+## ── USER CONFIGURATION ────────────────────────────────────────────────────
+
+Edit this block to match your data. All downstream scripts read these
+variables — you should **not** need to change column names anywhere else.
+
+```{r user-config}
+# ── Input file paths ──────────────────────────────────────────────────────────
+# Place your files in the project folder, or provide paths relative to it.
+file_abundance <- here("glasshouse_stem_STATS.csv")   # feature abundance table
+file_taxonomy  <- here("glasshouse_stem_TAX.csv")     # chemical classification
+file_metadata  <- here("glasshouse_stem_META.csv")    # sample metadata
+
+# ── Identifier columns ────────────────────────────────────────────────────────
+col_feature_id     <- "row.ID"              # row identifier in the abundance table
+col_feature_id_tax <- "mappingFeatureId"    # row identifier in the taxonomy table
+col_sample_id      <- "filename"            # sample identifier in the metadata table
+
+# ── Taxonomy columns (used in scripts 04, 05, 06) ────────────────────────────
+col_chem_name   <- "ChemVistaName"                   # preferred chemical name
+col_tax_fallback <- "ClassyFire.most.specific.class" # fallback name if col_chem_name is empty
+col_tax_level   <- "ClassyFire.class"                # compound class level for composition plots
+
+# ── Metadata variables for plots ─────────────────────────────────────────────
+col_color <- "timepoint"        # primary grouping variable  → colour in plots
+col_shape <- "group_treatment"  # secondary grouping variable → shape in plots
+
+# ── Samples to exclude from some analyses ────────────────────────────────────
+# Set col_exclude_val to NULL to include all samples (no exclusion).
+col_exclude_var <- "timepoint"    # metadata column that contains the level to exclude
+col_exclude_val <- "T3 healthy"   # value to exclude (e.g. a reference/baseline group)
+#   col_exclude_val <- NULL       # ← uncomment this line to disable exclusion
+
+# ── Variables for PERMANOVA (script 03) ───────────────────────────────────────
+# List every metadata column you want to test as a main effect.
+col_stat_vars <- c("timepoint", "infection", "treatment")
+
+# Full model: all main effects + all interactions between col_stat_vars.
+# Adjust if your design has fewer or different interaction terms.
+formula_full <- "~ timepoint + infection + treatment +
+                   timepoint:infection + timepoint:treatment + infection:treatment +
+                   timepoint:infection:treatment"
+
+# Best model: keep only the significant terms from the full model (edit after
+# inspecting full_model results in script 03).
+formula_best <- "~ timepoint + infection + treatment +
+                   infection:treatment + timepoint:treatment"
+
+# Formula for the constrained RDA in script 02 (same structure as formula_best
+# unless you want to visualise a different model).
+formula_rda <- "~ timepoint + treatment + infection + treatment:infection"
+
+# ── limma group factor (script 07) ───────────────────────────────────────────
+# Original group labels (must match values in the col_shape column of your metadata).
+limma_levels <- c("Control AOD", "Drought AOD", "Control water", "Drought water")
+# Safe labels (no spaces) used internally by limma's model matrix.
+limma_labels <- c("Control_AOD",  "Drought_AOD",  "Control_water", "Drought_water")
+# Contrast to test (use the safe label names defined above).
+limma_contrast <- "Drought_AOD - Drought_water"
+```
+
+---
+
+## Input files
+
+Three CSV files are required. The table below shows the expected structure —
+update `user-config` above to match your own file names and column names.
+
+| File | Contents |
+|------|----------|
+| Abundance (`file_abundance`) | Feature intensity table from MZmine — features in rows, samples in columns. Must have a feature ID column (`col_feature_id`). |
+| Taxonomy (`file_taxonomy`) | Chemical classification from SIRIUS/MolNetEnhancer/CANOPUS exported from Cytoscape — features in rows. Must have a feature ID column (`col_feature_id_tax`). |
+| Metadata (`file_metadata`) | Sample metadata in GNPS format (without the `ATTRIBUTE_` prefix). Must have a sample ID column (`col_sample_id`) matching the sample column names in the abundance table. |
+
+```{r load-data}
+otu_mat    <- read.csv(file_abundance, stringsAsFactors = FALSE)
+tax_mat    <- read.csv(file_taxonomy)
+samples_df <- read.csv(file_metadata)
+```
+
+## Build phyloseq object
+
+```{r build-phyloseq}
+otu_mat    <- otu_mat    %>% tibble::column_to_rownames(col_feature_id)
+tax_mat    <- tax_mat    %>% tibble::column_to_rownames(col_feature_id_tax)
+samples_df <- samples_df %>% tibble::column_to_rownames(col_sample_id)
+
+OTU     <- otu_table(as.matrix(otu_mat),    taxa_are_rows = TRUE)
+TAX     <- tax_table(as.matrix(tax_mat))
+samples <- sample_data(samples_df)
+
+oakgs <- phyloseq(OTU, TAX, samples)
+ntaxa(oakgs)   # number of metabolite features
+```
+
+## Create working objects for downstream scripts
+
+```{r create-objects}
+# Full dataset
+pseq <- oakgs
+
+# Dataset with the baseline/reference group excluded.
+# This object is used in scripts where the reference group would confound
+# treatment comparisons. Set col_exclude_val to NULL in the config above to
+# keep all samples.
+if (!is.null(col_exclude_val)) {
+  pseqs <- subset_samples(oakgs, sample_data(oakgs)[[col_exclude_var]] != col_exclude_val)
+  message("Created `pseqs`: ", col_exclude_val, " removed from ", col_exclude_var,
+          " (", nsamples(pseqs), " of ", nsamples(oakgs), " samples retained)")
+} else {
+  pseqs <- oakgs
+  message("No exclusion applied — `pseqs` is identical to `pseq`")
+}
+
+rm(otu_mat, samples, samples_df, tax_mat, OTU, TAX)
+```

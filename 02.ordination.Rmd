@@ -1,0 +1,153 @@
+---
+title: "Ordination — NMDS, PCoA, and RDA"
+output: html_document
+date: "2025-03-18"
+author: "Vanja Milenkovic"
+---
+
+> **Prerequisite:** Run `00.phyloseq_object.Rmd` first. That script creates
+> the `pseq` object and the configuration variables used here (`col_color`,
+> `col_shape`, `formula_rda`).
+
+Three ordination methods are used:
+
+- **NMDS** (Non-metric Multidimensional Scaling) — distance-based, non-linear
+- **PCoA** (Principal Coordinates Analysis) — distance-based, linear
+- **RDA** (Redundancy Analysis) — constrained ordination combining PCA with
+  regression; uses CLR-transformed data and the best-fit model from
+  `03.permanova.Rmd` (defined as `formula_rda` in script 00)
+
+Bray-Curtis dissimilarities are used for NMDS and PCoA. CLR transformation
+is used for RDA.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load packages
+
+```{r load-packages}
+library(plyr)
+library(dplyr)
+library(phyloseq)
+library(ggplot2)
+library(microbiomeutilities)
+library(microbiome)
+library(microViz)
+library(patchwork)
+```
+
+## NMDS and PCoA
+
+Bray-Curtis dissimilarities require relative abundance (compositional)
+data — CLR is not appropriate here.
+
+```{r nmds-pcoa-compute}
+ps_comp <- microbiome::transform(pseq, "compositional")
+
+dist      <- "bray"
+ord_meths <- c("NMDS", "PCoA")
+
+plist <- llply(as.list(ord_meths), function(i, physeq, dist) {
+  ordi <- ordinate(physeq, method = i, distance = dist)
+  plot_ordination(physeq, ordi, "samples",
+                  color = col_color, shape = col_shape)
+}, ps_comp, dist)
+
+names(plist) <- ord_meths
+```
+
+```{r nmds-pcoa-combine}
+pdataframe <- ldply(plist, function(x) {
+  df <- x$data[, 1:2]
+  colnames(df) <- c("Axis_1", "Axis_2")
+  cbind(df, x$data)
+})
+names(pdataframe)[1] <- "method"
+```
+
+```{r nmds-pcoa-plot}
+p <- ggplot(pdataframe,
+            aes(Axis_1, Axis_2,
+                color = .data[[col_color]],
+                shape = .data[[col_shape]],
+                fill  = .data[[col_color]])) +
+  geom_point(size = 2) +
+  facet_wrap(~method, scales = "free") +
+  scale_fill_brewer(type = "qual", palette = "Set1") +
+  scale_colour_brewer(type = "qual", palette = "Set1") +
+  stat_ellipse(aes(colour = .data[[col_color]], group = .data[[col_color]]),
+               size = 0.1) +
+  labs(
+    title  = "Ordination of Metabolite Composition (Bray-Curtis dissimilarities)",
+    x      = "Axis 1",
+    y      = "Axis 2",
+    color  = col_color,
+    fill   = col_color,
+    shape  = col_shape
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x     = element_text(size = 6, angle = 45, hjust = 1),
+    axis.text.y     = element_text(size = 6),
+    axis.title.x    = element_text(size = 8),
+    axis.title.y    = element_text(size = 8),
+    plot.title      = element_text(size = 10),
+    strip.text      = element_text(size = 6),
+    legend.text     = element_text(size = 5),
+    legend.title    = element_text(size = 7),
+    legend.key.size = unit(0.3, "cm")
+  )
+
+p
+
+dir.create("plots", showWarnings = FALSE)
+ggsave("plots/ordination_NMDS_PCoA.png", p,
+       width = 6.3, height = 3.15, units = "in", dpi = 600, bg = "white")
+```
+
+## RDA — constrained ordination
+
+RDA uses CLR-transformed data. The model formula (`formula_rda`) is defined
+in script 00 and should reflect your best-fit PERMANOVA model from script 03.
+
+```{r rda-plot}
+ps_rda <- microbiome::transform(ps_comp, "clr")
+
+ord <- ordinate(ps_rda, method = "RDA",
+                formula = as.formula(formula_rda))
+
+p_rda <- plot_ordination(ps_rda, ord,
+                         color = col_color, shape = col_shape) +
+  scale_colour_brewer(type = "qual", palette = "Set1") +
+  scale_fill_brewer(type = "qual", palette = "Set1") +
+  geom_point(size = 3) +
+  stat_ellipse(aes(group = .data[[col_color]])) +
+  ggtitle(paste("RDA:", formula_rda))
+
+p_rda
+```
+
+## Individual NMDS and PCoA plots
+
+```{r nmds-individual}
+p_nmds <- plist[[1]] +
+  scale_colour_brewer(type = "qual", palette = "Set1") +
+  scale_fill_brewer(type = "qual", palette = "Set1") +
+  geom_point(size = 3) +
+  stat_ellipse(aes(colour = .data[[col_color]], group = .data[[col_color]])) +
+  ggtitle(names(plist)[1])
+
+p_nmds
+```
+
+```{r pcoa-individual}
+p_pcoa <- plist[[2]] +
+  scale_colour_brewer(type = "qual", palette = "Set1") +
+  scale_fill_brewer(type = "qual", palette = "Set1") +
+  geom_point(size = 3) +
+  stat_ellipse(aes(colour = .data[[col_color]], group = .data[[col_color]])) +
+  ggtitle(names(plist)[2])
+
+p_pcoa
+```

@@ -1,0 +1,111 @@
+---
+title: "Heatmaps — Selected Features"
+output: html_document
+date: "2025-03-19"
+author: "Vanja Milenkovic"
+---
+
+> **Prerequisite:** Run `00.phyloseq_object.Rmd` first. That script creates
+> the `pseq` object and configuration variables used here (`col_color`,
+> `col_shape`).
+
+Heatmaps display relative abundance of a user-defined feature subset across
+samples, with samples annotated by the metadata variables defined in script 00.
+Features can be sorted and the top N most abundant are displayed.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## ── USER CONFIGURATION ───────────────────────────────────────────────────────
+
+```{r heatmap-config}
+# Row IDs of the features to include in the heatmap. Replace with your own.
+# These are VIP features from the treatment OPLS-DA model (SIMCA).
+features_heatmap <- c("15703", "15674", "18129", "1089",  "9293",  "42",
+                       "17962", "5485",  "11908", "10359", "975",   "10208")
+
+# Number of top features to display (by abundance)
+top_n_features <- 12
+
+# Annotation colours for the col_color variable (edit keys to match your levels)
+colour_primary <- c(
+  "T0"         = "#66C2A5",
+  "T1"         = "#FC8D62",
+  "T2"         = "#8DA0CB",
+  "T3"         = "#E78AC3",
+  "T3 healthy" = "#A6D854"
+)
+
+# Annotation colours for the col_shape variable (edit keys to match your levels)
+colour_secondary <- c(
+  "Control AOD"   = "#CAB2D6",
+  "Control water" = "#6A3D9A",
+  "Drought AOD"   = "#FB9A99",
+  "Drought water" = "#E31A1C"
+)
+```
+
+---
+
+## Load packages
+
+```{r load-packages}
+library(microbiome)
+library(knitr)
+library(phyloseq)
+library(tidyverse)
+library(dplyr)
+library(RColorBrewer)
+library(microbiomeutilities)
+library(pheatmap)
+library(microViz)
+```
+
+## Subset and arrange data
+
+Samples are sorted by `col_color` then `col_shape` (defined in script 00).
+The last `ps_arrange()` call is the primary sort.
+
+```{r subset-arrange}
+ps0 <- prune_taxa(taxa_names(pseq) %in% features_heatmap, pseq)
+
+ps0 <- ps_arrange(ps0, .data[[col_color]], .target = "sample_data")
+ps0 <- ps_arrange(ps0, .data[[col_shape]], .target = "sample_data")
+
+sample_data(ps0)
+```
+
+## Define colour palettes
+
+```{r define-colours}
+# Gradient palette for feature abundance
+grad_ab     <- colorRampPalette(c("#faf3dd", "#f7d486", "#5e6472"))
+grad_ab_pal <- grad_ab(12)
+
+# Annotation track colours — keys must match the actual levels in your data
+meta_colors        <- list(colour_primary, colour_secondary)
+names(meta_colors) <- c(col_color, col_shape)
+```
+
+## Heatmap
+
+```{r heatmap, fig.width=9.45, fig.height=5}
+pmaptop <- plot_taxa_heatmap(
+  ps0,
+  subset.top        = top_n_features,
+  VariableA         = c(col_color, col_shape),
+  heatcolors        = grad_ab_pal,
+  cluster_rows      = FALSE,
+  transformation    = "compositional",
+  cluster_cols      = FALSE,
+  show_colnames     = FALSE,
+  annotation_colors = meta_colors
+)
+
+pmaptop
+
+dir.create("plots", showWarnings = FALSE)
+ggsave("plots/selected_features_heatmap.png", pmaptop$plot,
+       width = 9.45, height = 5, units = "in", dpi = 600, bg = "white")
+```

@@ -1,0 +1,105 @@
+---
+title: "Principal Component Analysis (PCA)"
+output: html_document
+date: "2025-03-24"
+author: "Vanja Milenkovic"
+---
+
+> **Prerequisite:** Run `00.phyloseq_object.Rmd` first. That script creates
+> the `pseq` / `pseqs` objects and the configuration variables used here
+> (`col_color`, `col_shape`, `col_exclude_var`, `col_exclude_val`).
+
+PCA is an unconstrained ordination method that operates directly on
+(transformed) feature variables without a distance matrix. A centred
+log-ratio (CLR) transformation is applied before PCA to handle the
+compositional nature of metabolomics data.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load packages
+
+```{r load-packages}
+library(plyr)
+library(dplyr)
+library(phyloseq)
+library(ggplot2)
+library(microbiomeutilities)
+library(microbiome)
+library(microViz)
+library(patchwork)
+```
+
+## Prepare datasets
+
+CLR transformation is required for PCA. Two datasets are prepared:
+
+- `ps_all` — all samples
+- `ps_timepoints` — reference/baseline group excluded (controlled by
+  `col_exclude_var` / `col_exclude_val` in script 00)
+
+```{r prepare-data}
+ps_all <- microbiome::transform(pseq, "clr")
+
+if (!is.null(col_exclude_val)) {
+  ps_timepoints <- ps_filter(pseq, .data[[col_exclude_var]] != col_exclude_val)
+  ps_timepoints <- microbiome::transform(ps_timepoints, "clr")
+} else {
+  ps_timepoints <- ps_all
+}
+```
+
+## PCA — all samples
+
+```{r pca-all-samples}
+theme_set(theme_bw())
+
+pca_all <- ps_all %>%
+  ord_calc() %>%
+  ord_plot(color = col_color, shape = col_shape, size = 2) +
+  scale_colour_brewer(palette = "Set1") +
+  stat_ellipse(aes(colour = .data[[col_color]], group = .data[[col_color]]),
+               size = 0.5) +
+  labs(
+    title = "Principal Component Analysis (PCA) — all samples",
+    color = col_color,
+    shape = col_shape
+  ) +
+  theme(
+    axis.text.x     = element_text(size = 6, hjust = 1),
+    axis.text.y     = element_text(size = 6),
+    axis.title.x    = element_text(size = 8),
+    axis.title.y    = element_text(size = 8),
+    plot.title      = element_text(size = 10),
+    legend.text     = element_text(size = 5),
+    legend.title    = element_text(size = 7),
+    legend.key.size = unit(0.3, "cm")
+  )
+
+pca_all
+
+dir.create("plots", showWarnings = FALSE)
+ggsave("plots/PCA_all_metabolites.png", pca_all,
+       width = 6.3, height = 3.15, units = "in", dpi = 600, bg = "white")
+```
+
+## PCA — reference group excluded
+
+Only produced when `col_exclude_val` is not NULL in script 00.
+
+```{r pca-timepoints}
+pca_t <- ps_timepoints %>%
+  ord_calc() %>%
+  ord_plot(color = col_color, shape = col_shape, size = 2) +
+  scale_colour_brewer(palette = "Set1") +
+  stat_ellipse(aes(colour = .data[[col_color]], group = .data[[col_color]])) +
+  labs(
+    title = paste0("PCA — ", col_exclude_val %||% "all", " excluded"),
+    color = col_color,
+    shape = col_shape
+  ) +
+  theme(legend.position = "none")
+
+pca_t
+```

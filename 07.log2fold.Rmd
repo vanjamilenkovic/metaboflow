@@ -1,0 +1,195 @@
+---
+title: "Differential Abundance — Log2 Fold Change"
+output: html_document
+date: "2025-04-26"
+author: "Vanja Milenkovic"
+---
+
+> **Prerequisite:** Run `00.phyloseq_object.Rmd` first. That script creates
+> the `oakgs` / `pseqs` objects and the configuration variables used here
+> (`col_shape`, `col_color`, `col_exclude_var`, `col_exclude_val`,
+> `limma_levels`, `limma_labels`, `limma_contrast`).
+
+Two approaches to log2 fold-change analysis are provided:
+
+1. **limma-based (recommended):** Linear modelling with empirical Bayes
+   moderation. Requires a log-transformed intensity matrix and a metadata
+   CSV as separate input files.
+2. **Exploratory (phyloseq-based):** Simple mean log2FC between groups
+   directly from a phyloseq object. No statistical testing — for quick visual
+   screening only.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load packages
+
+```{r load-packages}
+library(limma)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(ggplot2)
+library(ggrepel)
+library(microbiome)
+library(here)
+```
+
+---
+
+## Part 1 — limma differential abundance
+
+### Input files
+
+| File | Contents |
+|------|----------|
+| `*_STATS_log.csv` | Log-transformed feature intensity matrix — features in rows, samples in columns. |
+| `*_META_log.csv`  | Sample metadata with a grouping column matching `col_shape` from script 00. |
+
+```{r load-limma-data}
+# Edit these paths to point to your own files
+expr_M <- read.csv(here("glasshouse_stem_STATS_log.csv"), row.names = 1)
+meta   <- read.csv(here("glasshouse_stem_META_log.csv"))
+```
+
+### Build design matrix
+
+Group labels are renamed to remove spaces (limma requirement). The levels
+and labels are defined in script 00 (`limma_levels`, `limma_labels`).
+
+```{r build-design}
+meta[[col_shape]] <- factor(meta[[col_shape]],
+                            levels = limma_levels,
+                            labels = limma_labels)
+
+design           <- model.matrix(~0 + meta[[col_shape]])
+colnames(design) <- limma_labels
+```
+
+### Fit model and define contrast
+
+The contrast to test is defined as `limma_contrast` in script 00.
+Edit that variable to change the comparison.
+
+```{r fit-model}
+fit  <- lmFit(expr_M, design)
+cont <- makeContrasts(contrasts = limma_contrast, levels = design)
+fit2 <- contrasts.fit(fit, cont)
+fit2 <- eBayes(fit2)
+
+res  <- topTable(fit2, number = Inf)
+```
+
+### Classify features as up / down / NS
+
+```{r classify-features}
+res <- res %>%
+  mutate(direction = case_when(
+    adj.P.Val <= 0.05 & logFC >=  1 ~ "Up",
+    adj.P.Val <= 0.05 & logFC <= -1 ~ "Down",
+    TRUE                             ~ "NS"
+  ))
+
+cat("Contrast tested:           ", limma_contrast, "\n")
+cat("Up-regulated metabolites:  ", sum(res$direction == "Up"),   "\n")
+cat("Down-regulated metabolites:", sum(res$direction == "Down"), "\n")
+```
+
+### Inspect top features
+
+```{r inspect-top-features}
+up_feats   <- res %>% filter(direction == "Up")   %>% arrange(desc(logFC))
+down_feats <- res %>% filter(direction == "Down") %>% arrange(logFC)
+
+head(up_feats,   10)
+head(down_feats, 10)
+```
+
+### Volcano plot
+
+```{r volcano-plot, fig.width=8, fig.height=6}
+res2 <- res %>% rownames_to_column(var = "Metabolite")
+
+sig      <- res2 %>% filter(adj.P.Val < 0.05, abs(logFC) >= 1)
+top_up   <- sig  %>% filter(logFC > 0) %>% arrange(desc(logFC)) %>% slice_head(n = 10)
+top_down <- sig  %>% filter(logFC < 0) %>% arrange(logFC)       %>% slice_head(n = 10)
+to_label <- bind_rows(top_up, top_down)
+
+ggplot(res2, aes(x = logFC, y = -log10(adj.P.Val))) +
+  geom_point(aes(color = direction), alpha = 0.6) +
+  scale_color_manual(values = c(Up = "red", Down = "blue", NS = "grey")) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  geom_text_repel(
+    data          = to_label,
+    aes(label     = Metabolite),
+    size          = 3,
+    box.padding   = 0.3,
+    point.padding = 0.2,
+    max.overlaps  = Inf
+  ) +
+  labs(
+    x     = expression(log[2]*"(Fold-Change)"),
+    y     = expression(-log[10]*"(FDR)"),
+    color = NULL,
+    title = paste("Volcano Plot —", limma_contrast,
+                  "\n(Top 10 Up & Down labelled)")
+  ) +
+  theme_minimal()
+```
+
+---
+
+## Part 2 — Exploratory log2FC from phyloseq (no statistical testing)
+
+Computes simple mean log2FC between two groups directly from a phyloseq
+object. Useful for a quick visual screen; not appropriate for reporting.
+
+```{r exploratory-config}
+# Define the two groups to compare (use the safe label names from limma_labels)
+group_numerator   <- limma_labels[2]   # e.g. "Drought_AOD"
+group_denominator <- limma_labels[1]   # e.g. "Control_AOD"
+```
+
+```{r exploratory-prepare}
+# Exclude baseline timepoint if configured in script 00
+if (!is.null(col_exclude_val)) {
+  ps_explore <- subset_samples(
+    oakgs,
+    sample_data(oakgs)[[col_exclude_var]] != col_exclude_val
+  )
+} else {
+  ps_explore <- oakgs
+}
+
+ps.rel <- microbiome::transform(ps_explore, "compositional")
+df     <- psmelt(ps.rel)
+
+df[[col_shape]] <- factor(df[[col_shape]],
+                           levels = limma_levels,
+                           labels = limma_labels)
+
+mean.df <- df %>%
+  group_by(OTU, .data[[col_shape]]) %>%
+  summarise(mu = mean(Abundance), .groups = "drop") %>%
+  pivot_wider(names_from  = col_shape,
+              values_from = mu,
+              values_fill = 0)
+```
+
+```{r exploratory-log2fc}
+mean.df <- mean.df %>%
+  mutate(
+    log2FC = log2((.data[[group_numerator]]   + 1e-6) /
+                  (.data[[group_denominator]] + 1e-6)),
+    direction = case_when(
+      log2FC >  1 ~ paste("Up in", group_numerator),
+      log2FC < -1 ~ paste("Up in", group_denominator),
+      TRUE        ~ "No change"
+    )
+  )
+
+cat("Comparison:", group_numerator, "vs", group_denominator, "\n")
+print(table(mean.df$direction))
+```

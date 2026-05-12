@@ -108,8 +108,5 @@ number of top features to display).
 If you use these scripts, please cite:
 
 > Milenkovic, V. (2025). Untargeted metabolomics analysis pipeline [R scripts].
-> GitHub. https://github.com/your-username/your-repo-name
+> GitHub. https://github.com/vanjamilenkovic/metaboflow
 
-## License
-
-MIT License — see `LICENSE` file for details.

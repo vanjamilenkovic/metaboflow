@@ -1,0 +1,6 @@
+# Tell GitHub's linguist to treat R Markdown files as R
+# so they count toward the repository language statistics.
+# See: https://github.com/github-linguist/linguist/blob/main/docs/overrides.md
+
+*.Rmd linguist-language=R
+*.rmd linguist-language=R
